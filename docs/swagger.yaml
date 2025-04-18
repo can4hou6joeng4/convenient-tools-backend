@@ -1,0 +1,138 @@
+basePath: /api
+definitions:
+  models.Step:
+    properties:
+      created_at:
+        type: string
+      desc:
+        type: string
+      id:
+        type: integer
+      order:
+        type: integer
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  models.Tool:
+    properties:
+      created_at:
+        type: string
+      description:
+        type: string
+      icon:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      steps:
+        items:
+          $ref: '#/definitions/models.Step'
+        type: array
+      updated_at:
+        type: string
+    type: object
+host: localhost:8082
+info:
+  contact:
+    email: can4hou6joeng4@163.com
+    name: bobochang
+    url: https://github.com/can4hou6joeng4/
+  description: This is a convenient tools project API documentation.
+  title: Convenient Tools API
+  version: "1.0"
+paths:
+  /file/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      description: 上传文件到服务器
+      parameters:
+      - description: 要上传的文件
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 上传文件
+      tags:
+      - file
+  /tools:
+    post:
+      consumes:
+      - application/json
+      description: 创建一个新的工具
+      parameters:
+      - description: 工具信息
+        in: body
+        name: tool
+        required: true
+        schema:
+          $ref: '#/definitions/models.Tool'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 创建新工具
+      tags:
+      - tools
+  /tools/list:
+    get:
+      consumes:
+      - application/json
+      description: 获取系统中所有已注册的工具
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 获取所有工具列表
+      tags:
+      - tools
+swagger: "2.0"

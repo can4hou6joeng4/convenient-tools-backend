@@ -1,0 +1,67 @@
+services:
+  app:
+    tty: true #keep the container running
+    restart: always
+    image: convenient-tools
+    container_name: convenient-tools
+    build: .
+    ports:
+      - 8082:8082
+    env_file:
+      - .env
+    networks:
+      - convenient-tools-network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/src/app
+    command: air -c .air.toml
+
+  db:
+    image: postgres:alpine
+    container_name: convenient-tools-db
+    environment:
+      - POSTGRES_HOST=${DB_HOST}
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    ports:
+      - 5433:5432
+    volumes:
+      - postgres-db:/var/lib/postgresql/data
+    networks:
+      - convenient-tools-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    container_name: convenient-tools-redis
+    restart: always
+    ports:
+      - 6380:6379
+    volumes:
+      - redis-data:/data
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    networks:
+      - convenient-tools-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  convenient-tools-network:
+
+
+volumes:
+  postgres-db:
+  redis-data:
