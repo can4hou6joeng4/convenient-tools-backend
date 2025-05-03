@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -214,6 +215,21 @@ func (h *CommonHandler) DownloadFile(ctx *fiber.Ctx) error {
 	// 使用resty客户端
 	client := resty.New()
 
+	// 获取主机名进行特殊处理
+	host := service.ExtractHost(url)
+
+	// 针对小红书视频的特殊处理
+	if service.IsXiaohongshuHost(host) {
+		// 尝试获取备用URL
+		alternateURL, err := service.HandleXiaohongshuVideo(client, url)
+		if err == nil && alternateURL != url {
+			log.Infof("Using alternate URL for xiaohongshu video: %s instead of %s", alternateURL, url)
+			url = alternateURL
+			// 更新主机名
+			host = service.ExtractHost(url)
+		}
+	}
+
 	// 检查是否有重定向，获取最终URL
 	finalURL, redirected, err := service.HandleVideoRedirects(client, url)
 	if err != nil && !redirected {
@@ -221,10 +237,9 @@ func (h *CommonHandler) DownloadFile(ctx *fiber.Ctx) error {
 	} else if redirected {
 		log.Infof("URL redirected from %s to %s", url, finalURL)
 		url = finalURL
+		// 更新主机名
+		host = service.ExtractHost(url)
 	}
-
-	// 获取主机名
-	host := service.ExtractHost(url)
 
 	// 获取针对该平台的特定配置
 	hostConfig := service.GetVideoHostConfig(host)
@@ -253,12 +268,20 @@ func (h *CommonHandler) DownloadFile(ctx *fiber.Ctx) error {
 		req.SetHeader(key, value)
 	}
 
+	// 添加特殊处理，直接复用微信小程序的User-Agent
+	if service.IsXiaohongshuHost(host) {
+		// 尝试完全匹配微信请求的User-Agent
+		req.SetHeader(service.HttpHeaderUserAgent, ctx.Get(service.HttpHeaderUserAgent))
+		// 添加微信请求头
+		req.SetHeader("Referer", ctx.Get("Referer"))
+	}
+
 	// 添加超时设置
 	client.SetTimeout(30 * time.Second)
 	client.SetRetryCount(2) // 失败时重试
 
 	// 记录请求信息，便于调试
-	log.Infof("Downloading file from %s with host %s, using agent: %s", url, host, service.GetUserAgent(hostConfig.UserAgentType))
+	log.Infof("Downloading file from %s with host %s, using agent: %s", url, host, req.Header.Get(service.HttpHeaderUserAgent))
 
 	// 发送请求获取文件内容
 	resp, err := req.Get(url)
@@ -284,6 +307,17 @@ func (h *CommonHandler) DownloadFile(ctx *fiber.Ctx) error {
 	// 检查响应状态
 	if rawResponse.StatusCode != http.StatusOK {
 		log.Errorf("file source responded with status: %d, headers: %v", rawResponse.StatusCode, rawResponse.Header)
+
+		// 针对小红书视频，尝试替换URL再试一次
+		if service.IsXiaohongshuHost(host) && rawResponse.StatusCode == http.StatusBadGateway {
+			// 返回自定义错误提示
+			return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
+				"status":  "fail",
+				"message": "小红书视频服务器拒绝访问，请复制视频链接在浏览器中尝试",
+				"details": fmt.Sprintf("服务器返回状态码: %d", rawResponse.StatusCode),
+			})
+		}
+
 		return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
 			"status":  "fail",
 			"message": fmt.Sprintf("File source responded with status: %d", rawResponse.StatusCode),
@@ -341,6 +375,21 @@ func (h *CommonHandler) ProxyVideo(ctx *fiber.Ctx) error {
 	// 使用resty客户端
 	client := resty.New()
 
+	// 获取主机名进行特殊处理
+	host := service.ExtractHost(videoURL)
+
+	// 针对小红书视频的特殊处理
+	if service.IsXiaohongshuHost(host) {
+		// 尝试获取备用URL
+		alternateURL, err := service.HandleXiaohongshuVideo(client, videoURL)
+		if err == nil && alternateURL != videoURL {
+			log.Infof("Using alternate URL for xiaohongshu video: %s instead of %s", alternateURL, videoURL)
+			videoURL = alternateURL
+			// 更新主机名
+			host = service.ExtractHost(videoURL)
+		}
+	}
+
 	// 检查是否有重定向，获取最终URL
 	finalURL, redirected, err := service.HandleVideoRedirects(client, videoURL)
 	if err != nil && !redirected {
@@ -348,10 +397,9 @@ func (h *CommonHandler) ProxyVideo(ctx *fiber.Ctx) error {
 	} else if redirected {
 		log.Infof("URL redirected from %s to %s", videoURL, finalURL)
 		videoURL = finalURL
+		// 更新主机名
+		host = service.ExtractHost(videoURL)
 	}
-
-	// 获取主机名
-	host := service.ExtractHost(videoURL)
 
 	// 获取针对该平台的特定配置
 	hostConfig := service.GetVideoHostConfig(host)
@@ -380,12 +428,20 @@ func (h *CommonHandler) ProxyVideo(ctx *fiber.Ctx) error {
 		req.SetHeader(key, value)
 	}
 
+	// 添加特殊处理，直接复用微信小程序的User-Agent
+	if service.IsXiaohongshuHost(host) {
+		// 尝试完全匹配微信请求的User-Agent
+		req.SetHeader(service.HttpHeaderUserAgent, ctx.Get(service.HttpHeaderUserAgent))
+		// 添加微信请求头
+		req.SetHeader("Referer", ctx.Get("Referer"))
+	}
+
 	// 添加超时设置
 	client.SetTimeout(30 * time.Second)
 	client.SetRetryCount(2) // 失败时重试
 
 	// 记录请求信息，便于调试
-	log.Infof("Proxying video from %s with host %s, using agent: %s", videoURL, host, service.GetUserAgent(hostConfig.UserAgentType))
+	log.Infof("Proxying video from %s with host %s, using agent: %s", videoURL, host, req.Header.Get(service.HttpHeaderUserAgent))
 
 	// 发送请求
 	resp, err := req.Get(videoURL)
@@ -411,6 +467,16 @@ func (h *CommonHandler) ProxyVideo(ctx *fiber.Ctx) error {
 	// 检查响应状态
 	if rawResponse.StatusCode != http.StatusOK {
 		log.Errorf("video source responded with status: %d, headers: %v", rawResponse.StatusCode, rawResponse.Header)
+
+		// 针对小红书视频，返回更友好的错误提示
+		if service.IsXiaohongshuHost(host) && rawResponse.StatusCode == http.StatusBadGateway {
+			return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
+				"status":  "fail",
+				"message": "小红书视频服务器拒绝访问，请使用其他方式下载或播放",
+				"details": fmt.Sprintf("服务器返回状态码: %d", rawResponse.StatusCode),
+			})
+		}
+
 		return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
 			"status":  "fail",
 			"message": fmt.Sprintf("Video source responded with status: %d", rawResponse.StatusCode),
@@ -533,6 +599,105 @@ func (h *CommonHandler) GetWeChatDownloadConfig(ctx *fiber.Ctx) error {
 	})
 }
 
+// GetXiaohongshuVideoInfo 获取小红书视频信息
+// @Summary 获取小红书视频直接链接
+// @Description 尝试解析小红书视频地址，获取可以直接播放的视频链接
+// @Tags tools
+// @Accept json
+// @Produce json
+// @Param url query string true "小红书视频URL"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /tools/xiaohongshu/video-info [get]
+func (h *CommonHandler) GetXiaohongshuVideoInfo(ctx *fiber.Ctx) error {
+	// 获取视频URL
+	videoURL := ctx.Query("url")
+	if videoURL == "" {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "fail",
+			"message": "URL is required",
+		})
+	}
+
+	// 验证是否是小红书链接
+	host := service.ExtractHost(videoURL)
+	if !service.IsXiaohongshuHost(host) && !strings.Contains(videoURL, "xiaohongshu") && !strings.Contains(videoURL, "xhslink") {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "fail",
+			"message": "Not a Xiaohongshu URL",
+		})
+	}
+
+	// 解析小红书链接
+	client := resty.New()
+
+	// 1. 尝试处理重定向
+	finalURL, redirected, err := service.HandleVideoRedirects(client, videoURL)
+	if err != nil && !redirected {
+		log.Errorf("Error handling redirects: %v", err)
+	} else if redirected {
+		log.Infof("URL redirected from %s to %s", videoURL, finalURL)
+		videoURL = finalURL
+	}
+
+	// 2. 尝试小红书特殊处理
+	alternateURL, err := service.HandleXiaohongshuVideo(client, videoURL)
+	if err == nil && alternateURL != videoURL {
+		videoURL = alternateURL
+	}
+
+	// 获取针对该平台的特定配置
+	hostConfig := service.GetVideoHostConfig(service.ExtractHost(videoURL))
+
+	// 准备请求
+	req := client.R().
+		SetHeader(service.HttpHeaderUserAgent, service.GetUserAgent(hostConfig.UserAgentType))
+
+	// 添加通用请求头
+	for key, value := range hostConfig.ExtraHeaders {
+		req.SetHeader(key, value)
+	}
+
+	// 添加Referer
+	if hostConfig.RefererURL != "" {
+		req.SetHeader(service.HttpHeaderReferer, hostConfig.RefererURL)
+	}
+
+	// 直接复用微信小程序的User-Agent
+	req.SetHeader(service.HttpHeaderUserAgent, ctx.Get(service.HttpHeaderUserAgent))
+	req.SetHeader("Referer", ctx.Get("Referer"))
+
+	// 检查URL是否可访问
+	resp, err := req.Head(videoURL)
+
+	var videoStatus string
+	if err != nil || (resp != nil && resp.StatusCode() != http.StatusOK) {
+		videoStatus = "不可直接访问"
+	} else {
+		videoStatus = "可直接访问"
+	}
+
+	// 返回信息
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status":  "success",
+		"message": "获取小红书视频信息成功",
+		"data": map[string]interface{}{
+			"original_url":   ctx.Query("url"),
+			"final_url":      videoURL,
+			"video_status":   videoStatus,
+			"download_url":   fmt.Sprintf("/api/tools/download?url=%s", url.QueryEscape(videoURL)),
+			"proxy_url":      fmt.Sprintf("/api/tools/proxy?url=%s", url.QueryEscape(videoURL)),
+			"is_xiaohongshu": true,
+			"alternate_domains": []string{
+				strings.Replace(videoURL, "sns-video-bd.xhscdn.com", "sns-video.xhscdn.com", 1),
+				strings.Replace(videoURL, "sns-video-bd.xhscdn.com", "sns-video-qc.xhscdn.com", 1),
+				strings.Replace(videoURL, "sns-video-bd.xhscdn.com", "sns-video-hw.xhscdn.com", 1),
+			},
+		},
+	})
+}
+
 func NewCommonHandler(router fiber.Router, repository *repositories.ToolRepository, redis *redis.Client, cos *cos.Client, config *config.EnvConfig) {
 	handler := &CommonHandler{
 		redis:      redis,
@@ -550,4 +715,6 @@ func NewCommonHandler(router fiber.Router, repository *repositories.ToolReposito
 	commonRouter.Get("/proxy", handler.ProxyVideo)
 	// 添加微信小程序下载配置路由
 	commonRouter.Get("/wechat-download-config", handler.GetWeChatDownloadConfig)
+	// 添加小红书视频信息路由
+	commonRouter.Get("/xiaohongshu/video-info", handler.GetXiaohongshuVideoInfo)
 }
