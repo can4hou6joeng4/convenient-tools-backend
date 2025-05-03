@@ -109,6 +109,64 @@
                 }
             }
         },
+        "/tools/download": {
+            "get": {
+                "description": "代理下载视频、图片等媒体资源，解决小程序环境中的合法域名限制问题",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "tools"
+                ],
+                "summary": "媒体文件下载代理",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "需要代理下载的媒体URL",
+                        "name": "url",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "下载文件的文件名",
+                        "name": "filename",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "对图片类型是否强制下载而非预览，默认false",
+                        "name": "forceDownload",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "文件内容",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/tools/list": {
             "get": {
                 "description": "获取系统中所有已注册的工具",
@@ -132,6 +190,59 @@
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/tools/wechat-download-config": {
+            "get": {
+                "description": "根据文件URL生成微信小程序下载所需的配置信息，包括权限要求和API调用建议",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tools"
+                ],
+                "summary": "获取微信小程序下载配置信息",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "需要下载的媒体URL",
+                        "name": "url",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "下载文件的文件名",
+                        "name": "filename",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true

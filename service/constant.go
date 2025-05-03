@@ -12,6 +12,14 @@ const (
 	MobileUserAgent       = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1 Edg/122.0.0.0"
 )
 
+// 文件类型常量
+const (
+	FileTypeImage = "image" // 图片文件
+	FileTypeVideo = "video" // 视频文件
+	FileTypeAudio = "audio" // 音频文件
+	FileTypeOther = "other" // 其他文件
+)
+
 // 视频渠道来源
 const (
 	SourceDouYin   = "douyin"   // 抖音
