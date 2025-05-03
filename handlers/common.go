@@ -214,17 +214,60 @@ func (h *CommonHandler) DownloadFile(ctx *fiber.Ctx) error {
 	// 使用resty客户端
 	client := resty.New()
 
+	// 检查是否有重定向，获取最终URL
+	finalURL, redirected, err := service.HandleVideoRedirects(client, url)
+	if err != nil && !redirected {
+		log.Errorf("Error handling redirects: %v", err)
+	} else if redirected {
+		log.Infof("URL redirected from %s to %s", url, finalURL)
+		url = finalURL
+	}
+
+	// 获取主机名
+	host := service.ExtractHost(url)
+
+	// 获取针对该平台的特定配置
+	hostConfig := service.GetVideoHostConfig(host)
+
+	// 准备请求
+	req := client.R().
+		SetHeader(service.HttpHeaderUserAgent, service.GetUserAgent(hostConfig.UserAgentType)).
+		SetDoNotParseResponse(true) // 不解析响应体，以便流式传输
+
+	// 添加通用请求头
+	req.SetHeader("Accept", "*/*")
+	req.SetHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.SetHeader("Connection", "keep-alive")
+
+	// 如果有特定的Referer和Origin，添加它们
+	if hostConfig.RefererURL != "" {
+		req.SetHeader(service.HttpHeaderReferer, hostConfig.RefererURL)
+	}
+
+	if hostConfig.OriginURL != "" {
+		req.SetHeader("Origin", hostConfig.OriginURL)
+	}
+
+	// 添加特定平台的额外请求头
+	for key, value := range hostConfig.ExtraHeaders {
+		req.SetHeader(key, value)
+	}
+
+	// 添加超时设置
+	client.SetTimeout(30 * time.Second)
+	client.SetRetryCount(2) // 失败时重试
+
+	// 记录请求信息，便于调试
+	log.Infof("Downloading file from %s with host %s, using agent: %s", url, host, service.GetUserAgent(hostConfig.UserAgentType))
+
 	// 发送请求获取文件内容
-	resp, err := client.R().
-		SetHeader(service.HttpHeaderUserAgent, service.DefaultUserAgent).
-		SetDoNotParseResponse(true). // 不解析响应体，以便流式传输
-		Get(url)
+	resp, err := req.Get(url)
 
 	if err != nil {
 		log.Errorf("download file error: %v", err)
 		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"status":  "fail",
-			"message": "Failed to download file",
+			"message": "Failed to download file: " + err.Error(),
 		})
 	}
 
@@ -240,7 +283,7 @@ func (h *CommonHandler) DownloadFile(ctx *fiber.Ctx) error {
 
 	// 检查响应状态
 	if rawResponse.StatusCode != http.StatusOK {
-		log.Errorf("file source responded with status: %d", rawResponse.StatusCode)
+		log.Errorf("file source responded with status: %d, headers: %v", rawResponse.StatusCode, rawResponse.Header)
 		return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
 			"status":  "fail",
 			"message": fmt.Sprintf("File source responded with status: %d", rawResponse.StatusCode),
@@ -298,11 +341,54 @@ func (h *CommonHandler) ProxyVideo(ctx *fiber.Ctx) error {
 	// 使用resty客户端
 	client := resty.New()
 
+	// 检查是否有重定向，获取最终URL
+	finalURL, redirected, err := service.HandleVideoRedirects(client, videoURL)
+	if err != nil && !redirected {
+		log.Errorf("Error handling redirects: %v", err)
+	} else if redirected {
+		log.Infof("URL redirected from %s to %s", videoURL, finalURL)
+		videoURL = finalURL
+	}
+
+	// 获取主机名
+	host := service.ExtractHost(videoURL)
+
+	// 获取针对该平台的特定配置
+	hostConfig := service.GetVideoHostConfig(host)
+
+	// 准备请求
+	req := client.R().
+		SetHeader(service.HttpHeaderUserAgent, service.GetUserAgent(hostConfig.UserAgentType)).
+		SetDoNotParseResponse(true) // 不解析响应体，便于流式传输
+
+	// 添加通用请求头
+	req.SetHeader("Accept", "*/*")
+	req.SetHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.SetHeader("Connection", "keep-alive")
+
+	// 如果有特定的Referer和Origin，添加它们
+	if hostConfig.RefererURL != "" {
+		req.SetHeader(service.HttpHeaderReferer, hostConfig.RefererURL)
+	}
+
+	if hostConfig.OriginURL != "" {
+		req.SetHeader("Origin", hostConfig.OriginURL)
+	}
+
+	// 添加特定平台的额外请求头
+	for key, value := range hostConfig.ExtraHeaders {
+		req.SetHeader(key, value)
+	}
+
+	// 添加超时设置
+	client.SetTimeout(30 * time.Second)
+	client.SetRetryCount(2) // 失败时重试
+
+	// 记录请求信息，便于调试
+	log.Infof("Proxying video from %s with host %s, using agent: %s", videoURL, host, service.GetUserAgent(hostConfig.UserAgentType))
+
 	// 发送请求
-	resp, err := client.R().
-		SetHeader(service.HttpHeaderUserAgent, service.DefaultUserAgent).
-		SetDoNotParseResponse(true). // 不解析响应体，便于流式传输
-		Get(videoURL)
+	resp, err := req.Get(videoURL)
 
 	if err != nil {
 		log.Errorf("fetch video error: %v", err)
@@ -324,7 +410,7 @@ func (h *CommonHandler) ProxyVideo(ctx *fiber.Ctx) error {
 
 	// 检查响应状态
 	if rawResponse.StatusCode != http.StatusOK {
-		log.Errorf("video source responded with status: %d", rawResponse.StatusCode)
+		log.Errorf("video source responded with status: %d, headers: %v", rawResponse.StatusCode, rawResponse.Header)
 		return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
 			"status":  "fail",
 			"message": fmt.Sprintf("Video source responded with status: %d", rawResponse.StatusCode),
