@@ -109,6 +109,45 @@ paths:
       summary: 创建新工具
       tags:
       - tools
+  /tools/download:
+    get:
+      consumes:
+      - application/json
+      description: 代理下载视频、图片等媒体资源，解决小程序环境中的合法域名限制问题
+      parameters:
+      - description: 需要代理下载的媒体URL
+        in: query
+        name: url
+        required: true
+        type: string
+      - description: 下载文件的文件名
+        in: query
+        name: filename
+        type: string
+      - description: 对图片类型是否强制下载而非预览，默认false
+        in: query
+        name: forceDownload
+        type: boolean
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: 文件内容
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 媒体文件下载代理
+      tags:
+      - tools
   /tools/list:
     get:
       consumes:
@@ -133,6 +172,42 @@ paths:
             additionalProperties: true
             type: object
       summary: 获取所有工具列表
+      tags:
+      - tools
+  /tools/wechat-download-config:
+    get:
+      consumes:
+      - application/json
+      description: 根据文件URL生成微信小程序下载所需的配置信息，包括权限要求和API调用建议
+      parameters:
+      - description: 需要下载的媒体URL
+        in: query
+        name: url
+        required: true
+        type: string
+      - description: 下载文件的文件名
+        in: query
+        name: filename
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 获取微信小程序下载配置信息
       tags:
       - tools
 swagger: "2.0"

@@ -175,10 +175,23 @@ func (h *CommonHandler) ParseShareUrl(ctx *fiber.Ctx) error {
 }
 
 // DownloadFile 处理文件下载请求
+// @Summary 媒体文件下载代理
+// @Description 代理下载视频、图片等媒体资源，解决小程序环境中的合法域名限制问题
+// @Tags tools
+// @Accept json
+// @Produce octet-stream
+// @Param url query string true "需要代理下载的媒体URL"
+// @Param filename query string false "下载文件的文件名"
+// @Param forceDownload query boolean false "对图片类型是否强制下载而非预览，默认false"
+// @Success 200 {file} binary "文件内容"
+// @Failure 400 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /tools/download [get]
 func (h *CommonHandler) DownloadFile(ctx *fiber.Ctx) error {
 	// 获取请求参数
 	url := ctx.Query("url")
 	filename := ctx.Query("filename")
+	forceDownload := ctx.QueryBool("forceDownload", false)
 
 	// 验证参数
 	if url == "" {
@@ -251,7 +264,17 @@ func (h *CommonHandler) DownloadFile(ctx *fiber.Ctx) error {
 
 	// 设置响应头
 	ctx.Set("Content-Type", contentType)
-	ctx.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+
+	// 确定是下载还是预览
+	isImage := strings.HasPrefix(contentType, "image/")
+	if forceDownload || !isImage {
+		// 强制下载或非图片内容
+		ctx.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	} else {
+		// 图片内容默认预览
+		ctx.Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filename))
+	}
+
 	// 如果源响应包含Content-Length，设置它
 	if cl := rawResponse.Header.Get("Content-Length"); cl != "" {
 		ctx.Set("Content-Length", cl)
@@ -348,6 +371,82 @@ func (h *CommonHandler) ProxyVideo(ctx *fiber.Ctx) error {
 	return ctx.SendStream(resp.RawBody())
 }
 
+// GetWeChatDownloadConfig 获取微信小程序下载配置信息
+// @Summary 获取微信小程序下载配置信息
+// @Description 根据文件URL生成微信小程序下载所需的配置信息，包括权限要求和API调用建议
+// @Tags tools
+// @Accept json
+// @Produce json
+// @Param url query string true "需要下载的媒体URL"
+// @Param filename query string false "下载文件的文件名"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /tools/wechat-download-config [get]
+func (h *CommonHandler) GetWeChatDownloadConfig(ctx *fiber.Ctx) error {
+	// 获取请求参数
+	url := ctx.Query("url")
+	filename := ctx.Query("filename")
+
+	// 验证参数
+	if url == "" {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "fail",
+			"message": "URL is required",
+		})
+	}
+
+	// 如果没有提供文件名，尝试从URL中提取
+	if filename == "" {
+		// 从URL中获取文件名
+		filename = filepath.Base(url)
+		// 如果URL不包含有效的文件名，使用默认名称
+		if filename == "." || filename == "/" || filename == "" {
+			filename = "download"
+		}
+	}
+
+	// 使用resty客户端发送HEAD请求获取Content-Type
+	client := resty.New()
+	resp, err := client.R().
+		SetHeader(service.HttpHeaderUserAgent, service.DefaultUserAgent).
+		Head(url)
+
+	if err != nil {
+		log.Errorf("head request error: %v", err)
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "fail",
+			"message": "Failed to get file information",
+		})
+	}
+
+	// 获取Content-Type
+	contentType := resp.Header().Get("Content-Type")
+
+	// 如果无法获取Content-Type，尝试从文件扩展名猜测
+	if contentType == "" {
+		ext := filepath.Ext(filename)
+		if ext != "" {
+			// 使用http包提供的MIME类型查找
+			contentType = mime.TypeByExtension(ext)
+		}
+		// 如果仍然无法确定，使用通用二进制类型
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+	}
+
+	// 生成微信小程序下载配置
+	config := service.GenerateWeChatDownloadConfig(url, filename, contentType)
+
+	// 返回配置信息
+	return ctx.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status":  "success",
+		"message": "Get WeChat download config success",
+		"data":    config,
+	})
+}
+
 func NewCommonHandler(router fiber.Router, repository *repositories.ToolRepository, redis *redis.Client, cos *cos.Client, config *config.EnvConfig) {
 	handler := &CommonHandler{
 		redis:      redis,
@@ -363,4 +462,6 @@ func NewCommonHandler(router fiber.Router, repository *repositories.ToolReposito
 	commonRouter.Get("/download", handler.DownloadFile)
 	// 添加视频代理路由
 	commonRouter.Get("/proxy", handler.ProxyVideo)
+	// 添加微信小程序下载配置路由
+	commonRouter.Get("/wechat-download-config", handler.GetWeChatDownloadConfig)
 }
