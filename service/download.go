@@ -2,6 +2,7 @@ package service
 
 import (
 	"mime"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -142,16 +143,17 @@ func GetVideoHostConfigs() map[string]VideoHostConfig {
 			OriginURL:     "https://www.xiaohongshu.com",
 			UserAgentType: "mobile",
 			ExtraHeaders: map[string]string{
-				"sec-ch-ua":                 `"Not/A)Brand";v="99", "Google Chrome";v="115", "Chromium";v="115"`,
-				"sec-ch-ua-mobile":          "?0",
-				"sec-ch-ua-platform":        `"iOS"`,
-				"sec-fetch-dest":            "document",
-				"sec-fetch-mode":            "navigate",
-				"sec-fetch-site":            "none",
-				"sec-fetch-user":            "?1",
-				"upgrade-insecure-requests": "1",
-				"X-Forwarded-For":           "223.104.41.25", // 中国IP，减少地域限制
-				"cookie":                    "xsecappid=xhs-pc-web;a1=187016c31dflbva806wl9ygzq62zk16q44z8yc73v50000327781;webId=7de93376af2a82d7f57ca338cef4bb73;gid=yYq288KSdqyYyYq288KS0ydWKhfiy4DhVFd2Y9qh2k2xFj98F6h299844qYKYiq8dy8jvKSS;web_session=030037a2b4dfc8fc8bbcaf9f1d9879e6c8faa3",
+				"sec-ch-ua":          `"Not A(Brand";v="99", "Microsoft Edge";v="121", "Chromium";v="121"`,
+				"sec-ch-ua-mobile":   "?1",
+				"sec-ch-ua-platform": `"Android"`,
+				"sec-fetch-dest":     "video",
+				"sec-fetch-mode":     "no-cors",
+				"sec-fetch-site":     "cross-site",
+				"sec-fetch-user":     "?1",
+				"pragma":             "no-cache",
+				"cache-control":      "no-cache",
+				"X-Forwarded-For":    "223.104.41.25", // 中国IP，减少地域限制
+				"cookie":             "xsecappid=xhs-pc-web; webId=681bec21e8314215e1583c6dd3071b10; gid=yYqxYyK8yDyjyYqxYyK8Sx8xJKSFdf48qCfAkF87q82y28082WxK8K8488q8d2qyYKJi8S; timestamp2=1680c7d0b3f36e96c2e3f7a2d; timestamp2.sig=nElj5VX3cHwUi3DlsR-eNEtdcZWx-FTLOts6u2zXkTg",
 			},
 		},
 		"xiaohongshu.com": {
@@ -159,16 +161,17 @@ func GetVideoHostConfigs() map[string]VideoHostConfig {
 			OriginURL:     "https://www.xiaohongshu.com",
 			UserAgentType: "mobile",
 			ExtraHeaders: map[string]string{
-				"sec-ch-ua":                 `"Not/A)Brand";v="99", "Google Chrome";v="115", "Chromium";v="115"`,
-				"sec-ch-ua-mobile":          "?0",
-				"sec-ch-ua-platform":        `"iOS"`,
-				"sec-fetch-dest":            "document",
-				"sec-fetch-mode":            "navigate",
-				"sec-fetch-site":            "none",
-				"sec-fetch-user":            "?1",
-				"upgrade-insecure-requests": "1",
-				"X-Forwarded-For":           "223.104.41.25", // 中国IP，减少地域限制
-				"cookie":                    "xsecappid=xhs-pc-web;a1=187016c31dflbva806wl9ygzq62zk16q44z8yc73v50000327781;webId=7de93376af2a82d7f57ca338cef4bb73;gid=yYq288KSdqyYyYq288KS0ydWKhfiy4DhVFd2Y9qh2k2xFj98F6h299844qYKYiq8dy8jvKSS;web_session=030037a2b4dfc8fc8bbcaf9f1d9879e6c8faa3",
+				"sec-ch-ua":          `"Not A(Brand";v="99", "Microsoft Edge";v="121", "Chromium";v="121"`,
+				"sec-ch-ua-mobile":   "?1",
+				"sec-ch-ua-platform": `"Android"`,
+				"sec-fetch-dest":     "document",
+				"sec-fetch-mode":     "navigate",
+				"sec-fetch-site":     "none",
+				"sec-fetch-user":     "?1",
+				"pragma":             "no-cache",
+				"cache-control":      "no-cache",
+				"X-Forwarded-For":    "223.104.41.25", // 中国IP，减少地域限制
+				"cookie":             "xsecappid=xhs-pc-web; webId=681bec21e8314215e1583c6dd3071b10; gid=yYqxYyK8yDyjyYqxYyK8Sx8xJKSFdf48qCfAkF87q82y28082WxK8K8488q8d2qyYKJi8S; timestamp2=1680c7d0b3f36e96c2e3f7a2d; timestamp2.sig=nElj5VX3cHwUi3DlsR-eNEtdcZWx-FTLOts6u2zXkTg",
 			},
 		},
 		// 抖音
@@ -228,7 +231,8 @@ func GetVideoHostConfig(host string) VideoHostConfig {
 // GetUserAgent 根据配置类型返回对应的User-Agent
 func GetUserAgent(userAgentType string) string {
 	if userAgentType == "mobile" {
-		return MobileUserAgent
+		// 使用微信小程序User-Agent，更容易被接受
+		return "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1 Edg/122.0.0.0"
 	}
 	return DefaultUserAgent
 }
@@ -274,4 +278,37 @@ func ExtractHost(urlStr string) string {
 		return ""
 	}
 	return parsedURL.Host
+}
+
+// 新增函数: 对小红书特殊处理
+// IsXiaohongshuHost 检查是否是小红书相关域名
+func IsXiaohongshuHost(host string) bool {
+	return strings.Contains(host, "xhscdn.com") || strings.Contains(host, "xiaohongshu.com")
+}
+
+// HandleXiaohongshuVideo 对小红书视频进行特殊处理
+func HandleXiaohongshuVideo(client *resty.Client, url string) (string, error) {
+	// 尝试直接替换域名访问原始视频
+	if strings.Contains(url, "sns-video-bd.xhscdn.com") {
+		// 替换为备用域名尝试
+		alternateUrls := []string{
+			strings.Replace(url, "sns-video-bd.xhscdn.com", "sns-video.xhscdn.com", 1),
+			strings.Replace(url, "sns-video-bd.xhscdn.com", "sns-video-qc.xhscdn.com", 1),
+			strings.Replace(url, "sns-video-bd.xhscdn.com", "sns-video-hw.xhscdn.com", 1),
+		}
+
+		// 测试备用URL是否有效
+		for _, altUrl := range alternateUrls {
+			resp, err := client.R().
+				SetHeader(HttpHeaderUserAgent, MobileUserAgent).
+				SetHeader("Referer", "https://www.xiaohongshu.com/").
+				Head(altUrl)
+
+			if err == nil && resp.StatusCode() == http.StatusOK {
+				return altUrl, nil
+			}
+		}
+	}
+
+	return url, nil
 }
