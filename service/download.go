@@ -1,11 +1,15 @@
 package service
 
 import (
+	"context"
+	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 )
@@ -288,27 +292,139 @@ func IsXiaohongshuHost(host string) bool {
 
 // HandleXiaohongshuVideo 对小红书视频进行特殊处理
 func HandleXiaohongshuVideo(client *resty.Client, url string) (string, error) {
+	// 检查URL格式
+	if !strings.Contains(url, "xhscdn.com") && !strings.Contains(url, "xiaohongshu.com") {
+		return url, nil
+	}
+
+	// 如果已经是替代域名，不需要再处理
+	if strings.Contains(url, "sns-video-hw.xhscdn.com") ||
+		strings.Contains(url, "sns-video-qc.xhscdn.com") ||
+		strings.Contains(url, "sns-video.xhscdn.com") {
+		return url, nil
+	}
+
 	// 尝试直接替换域名访问原始视频
 	if strings.Contains(url, "sns-video-bd.xhscdn.com") {
 		// 替换为备用域名尝试
 		alternateUrls := []string{
-			strings.Replace(url, "sns-video-bd.xhscdn.com", "sns-video.xhscdn.com", 1),
-			strings.Replace(url, "sns-video-bd.xhscdn.com", "sns-video-qc.xhscdn.com", 1),
 			strings.Replace(url, "sns-video-bd.xhscdn.com", "sns-video-hw.xhscdn.com", 1),
+			strings.Replace(url, "sns-video-bd.xhscdn.com", "sns-video-qc.xhscdn.com", 1),
+			strings.Replace(url, "sns-video-bd.xhscdn.com", "sns-video.xhscdn.com", 1),
 		}
 
 		// 测试备用URL是否有效
 		for _, altUrl := range alternateUrls {
-			resp, err := client.R().
-				SetHeader(HttpHeaderUserAgent, MobileUserAgent).
-				SetHeader("Referer", "https://www.xiaohongshu.com/").
-				Head(altUrl)
+			// 使用一个带有超时的上下文
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-			if err == nil && resp.StatusCode() == http.StatusOK {
-				return altUrl, nil
+			// 准备请求
+			req, err := http.NewRequestWithContext(ctx, "HEAD", altUrl, nil)
+			if err != nil {
+				continue
+			}
+
+			// 添加关键请求头
+			req.Header.Set(HttpHeaderUserAgent, MobileUserAgent)
+			req.Header.Set(HttpHeaderReferer, "https://www.xiaohongshu.com/")
+			req.Header.Set("Accept", "*/*")
+			req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
+			req.Header.Set("X-Forwarded-For", "223.104.41.25")
+
+			// 执行请求
+			httpClient := &http.Client{
+				Timeout: 5 * time.Second,
+				CheckRedirect: func(req *http.Request, via []*http.Request) error {
+					// 不自动跟随重定向
+					return http.ErrUseLastResponse
+				},
+			}
+
+			resp, err := httpClient.Do(req)
+			if err == nil {
+				defer resp.Body.Close()
+
+				// 检查状态码
+				if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent {
+					return altUrl, nil
+				} else if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusMovedPermanently {
+					// 处理重定向
+					location := resp.Header.Get("Location")
+					if location != "" {
+						return location, nil
+					}
+				}
 			}
 		}
+
+		// 如果所有尝试都失败，返回原始URL但使用hw域名
+		return strings.Replace(url, "sns-video-bd.xhscdn.com", "sns-video-hw.xhscdn.com", 1), nil
 	}
 
 	return url, nil
+}
+
+// 新增：流式代理下载小红书视频
+func StreamXiaohongshuVideo(url string, w http.ResponseWriter, r *http.Request) error {
+	// 替换为可能有效的域名
+	if strings.Contains(url, "sns-video-bd.xhscdn.com") {
+		url = strings.Replace(url, "sns-video-bd.xhscdn.com", "sns-video-hw.xhscdn.com", 1)
+	}
+
+	// 创建客户端
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	// 准备请求
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+
+	// 设置请求头
+	req.Header.Set(HttpHeaderUserAgent, MobileUserAgent)
+	req.Header.Set(HttpHeaderReferer, "https://www.xiaohongshu.com/")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
+	req.Header.Set("X-Forwarded-For", "223.104.41.25")
+	req.Header.Set("Origin", "https://www.xiaohongshu.com")
+
+	// 添加微信环境的Range头(如果存在)
+	if r.Header.Get("Range") != "" {
+		req.Header.Set("Range", r.Header.Get("Range"))
+	}
+
+	// 发送请求
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// 检查状态码
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("视频源返回状态码: %d", resp.StatusCode)
+	}
+
+	// 设置响应头
+	for k, v := range resp.Header {
+		if k != "Server" && k != "Date" && k != "Connection" {
+			w.Header().Set(k, v[0])
+		}
+	}
+
+	// 必要的跨域和缓存控制头
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Range, Origin, Content-Type, Accept")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+
+	// 设置状态码
+	w.WriteHeader(resp.StatusCode)
+
+	// 拷贝内容
+	_, err = io.Copy(w, resp.Body)
+	return err
 }

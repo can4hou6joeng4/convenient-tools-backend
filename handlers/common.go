@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -202,6 +203,15 @@ func (h *CommonHandler) DownloadFile(ctx *fiber.Ctx) error {
 		})
 	}
 
+	// 特殊处理小红书视频链接
+	if strings.Contains(url, "xhscdn.com") && strings.Contains(url, "video") {
+		// 强制替换域名
+		if strings.Contains(url, "sns-video-bd.xhscdn.com") {
+			url = strings.Replace(url, "sns-video-bd.xhscdn.com", "sns-video-hw.xhscdn.com", 1)
+			log.Infof("小红书视频链接替换: %s", url)
+		}
+	}
+
 	// 如果没有提供文件名，尝试从URL中提取
 	if filename == "" {
 		// 从URL中获取文件名
@@ -342,14 +352,28 @@ func (h *CommonHandler) DownloadFile(ctx *fiber.Ctx) error {
 	// 设置响应头
 	ctx.Set("Content-Type", contentType)
 
-	// 确定是下载还是预览
-	isImage := strings.HasPrefix(contentType, "image/")
-	if forceDownload || !isImage {
-		// 强制下载或非图片内容
+	// 对于视频文件，强制下载并添加正确的响应头
+	if strings.Contains(contentType, "video/") || strings.Contains(filename, ".mp4") ||
+		strings.Contains(url, "video") {
+		// 强制下载视频
 		ctx.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+		// 支持范围请求
+		ctx.Set("Accept-Ranges", "bytes")
+		// 视频播放相关头
+		ctx.Set("Cache-Control", "public, max-age=86400")
+		ctx.Set("Access-Control-Allow-Origin", "*")
+		ctx.Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		ctx.Set("Access-Control-Allow-Headers", "Range, Origin, Content-Type, Accept")
 	} else {
-		// 图片内容默认预览
-		ctx.Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filename))
+		// 确定是下载还是预览
+		isImage := strings.HasPrefix(contentType, "image/")
+		if forceDownload || !isImage {
+			// 强制下载或非图片内容
+			ctx.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+		} else {
+			// 图片内容默认预览
+			ctx.Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filename))
+		}
 	}
 
 	// 如果源响应包含Content-Length，设置它
@@ -698,6 +722,124 @@ func (h *CommonHandler) GetXiaohongshuVideoInfo(ctx *fiber.Ctx) error {
 	})
 }
 
+// DirectDownloadVideo 直接下载视频文件(为微信小程序优化)
+// @Summary 直接下载视频文件
+// @Description 为微信小程序优化的视频下载接口，专门处理小红书等视频平台
+// @Tags tools
+// @Accept json
+// @Produce octet-stream
+// @Param url query string true "视频URL"
+// @Param filename query string false "保存的文件名"
+// @Success 200 {file} binary "视频文件"
+// @Failure 400 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /tools/video/download [get]
+func (h *CommonHandler) DirectDownloadVideo(ctx *fiber.Ctx) error {
+	// 获取视频URL
+	videoURL := ctx.Query("url")
+	if videoURL == "" {
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":  "fail",
+			"message": "Video URL is required",
+		})
+	}
+
+	// 获取文件名
+	filename := ctx.Query("filename")
+	if filename == "" {
+		filename = filepath.Base(videoURL)
+		if filename == "." || filename == "/" || filename == "" {
+			filename = "video.mp4"
+		}
+	}
+
+	// 确保文件名有.mp4后缀
+	if !strings.HasSuffix(filename, ".mp4") {
+		filename += ".mp4"
+	}
+
+	// 对小红书视频进行域名替换
+	if strings.Contains(videoURL, "xhscdn.com") && strings.Contains(videoURL, "video") {
+		if strings.Contains(videoURL, "sns-video-bd.xhscdn.com") {
+			videoURL = strings.Replace(videoURL, "sns-video-bd.xhscdn.com", "sns-video-hw.xhscdn.com", 1)
+			log.Infof("小红书视频域名替换: %s", videoURL)
+		}
+	}
+
+	// 准备HTTP客户端
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+
+	// 准备请求
+	req, err := http.NewRequest("GET", videoURL, nil)
+	if err != nil {
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "fail",
+			"message": "Failed to create request: " + err.Error(),
+		})
+	}
+
+	// 添加请求头
+	req.Header.Set("User-Agent", ctx.Get("User-Agent"))
+	req.Header.Set("Referer", "https://www.xiaohongshu.com/")
+	req.Header.Set("Origin", "https://www.xiaohongshu.com")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("X-Forwarded-For", "223.104.41.25")
+
+	// 发送请求
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Errorf("下载视频错误: %v", err)
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "fail",
+			"message": "Download video failed: " + err.Error(),
+		})
+	}
+	defer resp.Body.Close()
+
+	// 检查状态码
+	if resp.StatusCode != http.StatusOK {
+		log.Errorf("视频服务器返回错误状态码: %d", resp.StatusCode)
+		return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
+			"status":  "fail",
+			"message": fmt.Sprintf("Video server responded with status: %d", resp.StatusCode),
+		})
+	}
+
+	// 设置响应头
+	ctx.Set("Content-Type", "video/mp4")
+	ctx.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+
+	// 如果有Content-Length，也设置它
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		ctx.Set("Content-Length", cl)
+	}
+
+	// 支持范围请求
+	ctx.Set("Accept-Ranges", "bytes")
+
+	// 流式传输视频内容
+	_, err = io.Copy(ctx.Response().BodyWriter(), resp.Body)
+	if err != nil {
+		log.Errorf("流式传输视频内容失败: %v", err)
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"status":  "fail",
+			"message": "Failed to stream video content: " + err.Error(),
+		})
+	}
+
+	return nil
+}
+
 func NewCommonHandler(router fiber.Router, repository *repositories.ToolRepository, redis *redis.Client, cos *cos.Client, config *config.EnvConfig) {
 	handler := &CommonHandler{
 		redis:      redis,
@@ -717,4 +859,6 @@ func NewCommonHandler(router fiber.Router, repository *repositories.ToolReposito
 	commonRouter.Get("/wechat-download-config", handler.GetWeChatDownloadConfig)
 	// 添加小红书视频信息路由
 	commonRouter.Get("/xiaohongshu/video-info", handler.GetXiaohongshuVideoInfo)
+	// 添加专门的视频下载路由
+	commonRouter.Get("/video/download", handler.DirectDownloadVideo)
 }
