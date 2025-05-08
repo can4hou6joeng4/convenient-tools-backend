@@ -1,4 +1,5 @@
 *.txt
+.cursor/*
 backend-api-docs.md
 api-docs.md
 tmp
