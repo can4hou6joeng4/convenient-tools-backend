@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math/rand"
 	"net/url"
 	"regexp"
 	"strings"
@@ -182,13 +181,4 @@ func (d Douyin) GetRedirectUrl(videoInfo *models.VideoParseInfo) {
 	if locationRes != nil {
 		(*videoInfo).VideoUrl = locationRes.String()
 	}
-}
-
-func (d Douyin) RandSeq(n int) string {
-	letters := []rune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-	b := make([]rune, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
-	}
-	return string(b)
 }
