@@ -102,7 +102,6 @@ http://localhost:8082/swagger/
 
 - 🎬 `/api/tools/parse` - 解析视频分享链接
 - 🌐 `/api/tools/media-proxy` - 媒体资源代理
-- 📺 `/api/tools/proxy` - 视频代理
 - 📤 `/api/file/upload` - 文件上传
 - 🔄 `/api/pdf/convert` - PDF转换
 - 📊 `/api/pdf/progress/{taskId}` - 查询转换进度
