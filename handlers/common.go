@@ -331,6 +331,5 @@ func NewCommonHandler(router fiber.Router, repository *repositories.ToolReposito
 	commonRouter.Get("/list", handler.GetTools)
 	commonRouter.Post("/", handler.CreateTool)
 	commonRouter.Post("/file/upload", handler.Upload)
-	// 添加媒体代理路由
 	commonRouter.Get("/media-proxy", handler.ProxyMedia)
 }
