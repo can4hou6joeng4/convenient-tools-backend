@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -175,18 +177,28 @@ func (h *CommonHandler) ParseShareUrl(ctx *fiber.Ctx) error {
 
 // ProxyMedia 代理媒体文件
 // @Summary 代理媒体文件
-// @Description 从远程服务器获取媒体文件并转发给客户端，解决小程序域名限制问题
+// @Description 从远程服务器获取媒体文件并转发给客户端，解决小程序域名限制问题，支持视频格式转换
 // @Tags tools
 // @Accept json
 // @Produce octet-stream
 // @Param url query string true "媒体文件URL"
 // @Param type query string false "媒体类型(video/image)"
+// @Param format query string false "输出格式(mp4/webm/mov)"
 // @Success 200 {file} binary "媒体文件"
 // @Failure 400 {object} map[string]interface{}
 // @Failure 405 {object} map[string]interface{}
 // @Failure 500 {object} map[string]interface{}
 // @Router /tools/media-proxy [get]
 func (h *CommonHandler) ProxyMedia(ctx *fiber.Ctx) error {
+	// 获取请求信息
+	mediaURL := ctx.Query("url")
+	mediaType := ctx.Query("type", "video")
+	format := ctx.Query("format", "")
+	userAgent := ctx.Get("User-Agent")
+
+	// 记录请求信息
+	log.Infof("媒体代理请求: URL=%s, 类型=%s, 格式=%s, UA=%s", mediaURL, mediaType, format, userAgent)
+
 	// 只允许GET请求
 	if ctx.Method() != "GET" {
 		return ctx.Status(fiber.StatusMethodNotAllowed).JSON(fiber.Map{
@@ -194,21 +206,17 @@ func (h *CommonHandler) ProxyMedia(ctx *fiber.Ctx) error {
 		})
 	}
 
-	// 获取请求参数
-	mediaURL := ctx.Query("url")
-	mediaType := ctx.Query("type", "video") // 默认为视频
-
 	// 验证URL参数
 	if mediaURL == "" {
 		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Missing url parameter",
+			"error": "缺少url参数",
 		})
 	}
 
 	// 验证URL格式和协议
 	if !strings.HasPrefix(mediaURL, "http://") && !strings.HasPrefix(mediaURL, "https://") {
 		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid URL protocol",
+			"error": "无效的URL协议",
 		})
 	}
 
@@ -216,19 +224,34 @@ func (h *CommonHandler) ProxyMedia(ctx *fiber.Ctx) error {
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			// 允许最多10次重定向
 			if len(via) >= 10 {
-				return fmt.Errorf("too many redirects")
+				return fmt.Errorf("重定向次数过多")
 			}
 			return nil
 		},
 	}
 
+	// 根据媒体类型处理请求
+	switch mediaType {
+	case "video":
+		return h.handleVideoProxy(ctx, client, mediaURL, format)
+	case "image":
+		return h.handleImageProxy(ctx, client, mediaURL)
+	default:
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "不支持的媒体类型",
+		})
+	}
+}
+
+// handleVideoProxy 处理视频代理请求
+func (h *CommonHandler) handleVideoProxy(ctx *fiber.Ctx, client *http.Client, url string, format string) error {
 	// 创建请求
-	req, err := http.NewRequest("GET", mediaURL, nil)
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
+		log.Errorf("创建请求失败: %v", err)
 		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": fmt.Sprintf("Failed to create request: %v", err),
+			"error": fmt.Sprintf("创建请求失败: %v", err),
 		})
 	}
 
@@ -238,85 +261,175 @@ func (h *CommonHandler) ProxyMedia(ctx *fiber.Ctx) error {
 	// 发送请求
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Errorf("获取视频失败: %v", err)
 		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": fmt.Sprintf("Failed to fetch media: %v", err),
+			"error": fmt.Sprintf("获取视频失败: %v", err),
 		})
 	}
 	defer resp.Body.Close()
 
 	// 检查状态码
 	if resp.StatusCode != http.StatusOK {
+		log.Errorf("源服务器响应错误: %s", resp.Status)
 		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": fmt.Sprintf("Remote server returned status code %d", resp.StatusCode),
+			"error": fmt.Sprintf("源服务器响应错误: %s", resp.Status),
 		})
 	}
 
-	// 设置Content-Type
-	contentType := getMediaContentType(mediaType, mediaURL, resp.Header.Get("Content-Type"))
-	ctx.Set("Content-Type", contentType)
+	// 读取响应内容
+	videoData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Errorf("读取视频数据失败: %v", err)
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fmt.Sprintf("读取视频数据失败: %v", err),
+		})
+	}
+
+	// 检查视频数据的有效性
+	if len(videoData) < 1024 {
+		log.Errorf("视频数据无效或太小: %d bytes", len(videoData))
+		return ctx.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "视频数据无效或太小",
+		})
+	}
+
+	// 检测视频格式，如果需要且不是MP4，则转换为MP4
+	needConversion := format == "mp4" || (format == "" && !isMP4(videoData, resp.Header.Get("Content-Type")))
+
+	if needConversion {
+		// 使用FFmpeg进行格式转换
+		convertedData, err := convertToMP4(videoData)
+		if err != nil {
+			log.Errorf("视频格式转换失败: %v", err)
+			return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": fmt.Sprintf("视频格式转换失败: %v", err),
+			})
+		}
+		videoData = convertedData
+
+		// 设置正确的Content-Type和文件扩展名
+		ctx.Set("Content-Type", "video/mp4")
+		ctx.Set("Content-Disposition", `attachment; filename="video.mp4"`)
+	} else {
+		// 保持原始格式
+		ctx.Set("Content-Type", resp.Header.Get("Content-Type"))
+	}
 
 	// 设置其他响应头
-	if contentLength := resp.Header.Get("Content-Length"); contentLength != "" {
-		ctx.Set("Content-Length", contentLength)
-	}
+	ctx.Set("X-Content-Type-Options", "nosniff")
+	ctx.Set("Accept-Ranges", "bytes")
+	ctx.Set("Content-Length", fmt.Sprintf("%d", len(videoData)))
 	ctx.Set("Access-Control-Allow-Origin", "*")
-	ctx.Set("Cache-Control", "public, max-age=86400") // 缓存24小时
+	ctx.Set("Cache-Control", "public, max-age=3600") // 缓存1小时
 
-	// 将媒体文件流式传输给客户端
+	// 返回视频数据
+	return ctx.Send(videoData)
+}
+
+// handleImageProxy 处理图片代理请求
+func (h *CommonHandler) handleImageProxy(ctx *fiber.Ctx, client *http.Client, url string) error {
+	// 创建请求
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Errorf("创建请求失败: %v", err)
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fmt.Sprintf("创建请求失败: %v", err),
+		})
+	}
+
+	// 添加用户代理头
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+	// 发送请求
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Errorf("获取图片失败: %v", err)
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fmt.Sprintf("获取图片失败: %v", err),
+		})
+	}
+	defer resp.Body.Close()
+
+	// 检查状态码
+	if resp.StatusCode != http.StatusOK {
+		log.Errorf("源服务器响应错误: %s", resp.Status)
+		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fmt.Sprintf("源服务器响应错误: %s", resp.Status),
+		})
+	}
+
+	// 设置响应头
+	ctx.Set("Content-Type", resp.Header.Get("Content-Type"))
+	ctx.Set("X-Content-Type-Options", "nosniff")
+	ctx.Set("Access-Control-Allow-Origin", "*")
+	ctx.Set("Cache-Control", "public, max-age=3600") // 缓存1小时
+
+	// 将图片流式传输给客户端
 	_, err = io.Copy(ctx.Response().BodyWriter(), resp.Body)
 	if err != nil {
+		log.Errorf("传输图片数据失败: %v", err)
 		return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": fmt.Sprintf("Failed to stream media: %v", err),
+			"error": fmt.Sprintf("传输图片数据失败: %v", err),
 		})
 	}
 
 	return nil
 }
 
-// getMediaContentType 获取媒体文件的Content-Type
-func getMediaContentType(mediaType, url, originalContentType string) string {
-	// 如果原始服务器提供了Content-Type，优先使用
-	if originalContentType != "" && originalContentType != "application/octet-stream" {
-		return originalContentType
+// isMP4 检查视频是否为MP4格式
+func isMP4(data []byte, contentType string) bool {
+	// 检查内容类型
+	if strings.Contains(strings.ToLower(contentType), "mp4") {
+		return true
 	}
 
-	// 将URL转为小写以便于扩展名匹配
-	urlLower := strings.ToLower(url)
-	extension := strings.ToLower(filepath.Ext(urlLower))
-
-	// 根据媒体类型和文件扩展名确定Content-Type
-	if mediaType == "image" {
-		switch extension {
-		case ".jpg", ".jpeg":
-			return "image/jpeg"
-		case ".png":
-			return "image/png"
-		case ".gif":
-			return "image/gif"
-		case ".webp":
-			return "image/webp"
-		case ".svg":
-			return "image/svg+xml"
-		default:
-			return "image/jpeg" // 默认图片类型
-		}
-	} else if mediaType == "video" {
-		switch extension {
-		case ".mp4":
-			return "video/mp4"
-		case ".webm":
-			return "video/webm"
-		case ".ogg", ".ogv":
-			return "video/ogg"
-		case ".mov":
-			return "video/quicktime"
-		default:
-			return "video/mp4" // 默认视频类型
-		}
+	// 检查文件头部标记
+	if len(data) > 4 {
+		// MP4文件的标记通常是 ftyp
+		return bytes.Contains(data[:50], []byte("ftyp"))
 	}
 
-	// 默认二进制流
-	return "application/octet-stream"
+	return false
+}
+
+// convertToMP4 将视频转换为MP4格式
+func convertToMP4(videoData []byte) ([]byte, error) {
+	// 创建临时输入文件
+	tempInFile, err := os.CreateTemp("", "video-in-*")
+	if err != nil {
+		return nil, fmt.Errorf("创建临时输入文件失败: %v", err)
+	}
+	defer os.Remove(tempInFile.Name())
+
+	// 写入原始视频数据
+	if _, err = tempInFile.Write(videoData); err != nil {
+		return nil, fmt.Errorf("写入临时文件失败: %v", err)
+	}
+	tempInFile.Close()
+
+	// 创建临时输出文件
+	tempOutFile, err := os.CreateTemp("", "video-out-*.mp4")
+	if err != nil {
+		return nil, fmt.Errorf("创建临时输出文件失败: %v", err)
+	}
+	defer os.Remove(tempOutFile.Name())
+	tempOutFile.Close()
+
+	// 使用FFmpeg进行转换
+	cmd := exec.Command("ffmpeg",
+		"-i", tempInFile.Name(),
+		"-c:v", "libx264", // 使用H.264编码
+		"-preset", "fast", // 快速编码
+		"-c:a", "aac", // 音频使用AAC编码
+		"-y", // 覆盖输出文件
+		tempOutFile.Name())
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("FFmpeg转换失败: %v, 输出: %s", err, string(output))
+	}
+
+	// 读取转换后的文件
+	return os.ReadFile(tempOutFile.Name())
 }
 
 func NewCommonHandler(router fiber.Router, repository *repositories.ToolRepository, redis *redis.Client, cos *cos.Client, config *config.EnvConfig) {
