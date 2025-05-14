@@ -42,18 +42,30 @@ func (r RedBook) ParseShareUrl(shareUrl string) (*models.VideoParseInfo, error) 
 	images := make([]string, 0, len(imagesObjArr))
 	if len(videoUrl) <= 0 {
 		for _, imageItem := range imagesObjArr {
-			imageUrl := imageItem.Get("urlDefault").String()
-			if len(imageUrl) > 0 {
-				imgId := strings.Split(imageUrl[strings.LastIndex(imageUrl, "/")+1:], "!")[0]
-				// 如果链接中带有 spectrum/ , 替换域名时需要带上
-				spectrumStr := ""
-				if strings.Contains(imageUrl, "spectrum") {
-					spectrumStr = "spectrum/"
+			// 检查是否为livePhoto
+			isLivePhoto := imageItem.Get("livePhoto").Bool()
+
+			if isLivePhoto {
+				// 如果是livePhoto，获取视频URL
+				livePhotoUrl := imageItem.Get("video.media.stream.h264.0.masterUrl").String()
+				if len(livePhotoUrl) > 0 {
+					images = append(images, livePhotoUrl)
 				}
-				newUrl := fmt.Sprintf("https://ci.xiaohongshu.com/%s%s?imageView2/2/w/0/format/jpg", spectrumStr, imgId)
-				fmt.Println(imageUrl)
-				fmt.Println(newUrl)
-				images = append(images, newUrl)
+			} else {
+				// 处理普通图片
+				imageUrl := imageItem.Get("urlDefault").String()
+				if len(imageUrl) > 0 {
+					imgId := strings.Split(imageUrl[strings.LastIndex(imageUrl, "/")+1:], "!")[0]
+					// 如果链接中带有 spectrum/ , 替换域名时需要带上
+					spectrumStr := ""
+					if strings.Contains(imageUrl, "spectrum") {
+						spectrumStr = "spectrum/"
+					}
+					newUrl := fmt.Sprintf("https://ci.xiaohongshu.com/%s%s?imageView2/2/w/0/format/jpg", spectrumStr, imgId)
+					fmt.Println(imageUrl)
+					fmt.Println(newUrl)
+					images = append(images, newUrl)
+				}
 			}
 		}
 	}
