@@ -328,6 +328,113 @@ func (h *CommonHandler) handleVideoProxy(ctx *fiber.Ctx, client *http.Client, ur
 
 // handleImageProxy 处理图片代理请求
 func (h *CommonHandler) handleImageProxy(ctx *fiber.Ctx, client *http.Client, url string) error {
+	originalURL := url
+
+	// 特殊处理小红书域名的图片链接
+	if strings.Contains(url, "xhscdn.com") || strings.Contains(url, "xiaohongshu.com") {
+		// 添加备用URL处理逻辑
+		backupURLs := []string{url}
+
+		// 尝试从URL提取图片ID
+		var imgId string
+		if strings.Contains(url, "!") {
+			// 处理形如 xxx/yyy!format 的URL
+			urlPart := url[strings.LastIndex(url, "/")+1:]
+			if idx := strings.Index(urlPart, "!"); idx > 0 {
+				imgId = urlPart[:idx]
+			}
+		} else if strings.Contains(url, "?") {
+			// 处理带查询参数的URL
+			urlPath := strings.Split(url, "?")[0]
+			imgId = urlPath[strings.LastIndex(urlPath, "/")+1:]
+		} else {
+			// 处理其他格式URL
+			imgId = url[strings.LastIndex(url, "/")+1:]
+		}
+
+		// 如果能提取到ID，则添加备用URL
+		if imgId != "" && len(imgId) > 10 {
+			// 添加ci.xiaohongshu.com备用URL
+			backupURLs = append(backupURLs, fmt.Sprintf("https://ci.xiaohongshu.com/%s?imageView2/2/w/0/format/jpg", imgId))
+		}
+
+		// 尝试每个URL，直到成功获取图片
+		for i, tryURL := range backupURLs {
+			log.Infof("尝试获取图片 (尝试 %d/%d): %s", i+1, len(backupURLs), tryURL)
+
+			// 创建请求
+			req, err := http.NewRequest("GET", tryURL, nil)
+			if err != nil {
+				log.Errorf("创建请求失败 (URL: %s): %v", tryURL, err)
+				if i < len(backupURLs)-1 {
+					continue // 尝试下一个URL
+				}
+				return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+					"error": fmt.Sprintf("创建请求失败: %v", err),
+				})
+			}
+
+			// 添加用户代理头 - 使用更真实的移动设备UA
+			req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1")
+			req.Header.Set("Referer", "https://www.xiaohongshu.com/")
+
+			// 发送请求
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Errorf("获取图片失败 (URL: %s): %v", tryURL, err)
+				if i < len(backupURLs)-1 {
+					continue // 尝试下一个URL
+				}
+				return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+					"error": fmt.Sprintf("获取图片失败: %v", err),
+				})
+			}
+
+			// 检查状态码
+			if resp.StatusCode != http.StatusOK {
+				log.Errorf("源服务器响应错误 (URL: %s): %s", tryURL, resp.Status)
+				resp.Body.Close()
+				if i < len(backupURLs)-1 {
+					continue // 尝试下一个URL
+				}
+				return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+					"error": fmt.Sprintf("源服务器响应错误: %s", resp.Status),
+				})
+			}
+
+			// 设置响应头
+			ctx.Set("Content-Type", resp.Header.Get("Content-Type"))
+			ctx.Set("X-Content-Type-Options", "nosniff")
+			ctx.Set("Access-Control-Allow-Origin", "*")
+			ctx.Set("Cache-Control", "public, max-age=3600") // 缓存1小时
+			ctx.Set("X-Original-URL", originalURL)
+			ctx.Set("X-Actual-URL", tryURL)
+
+			// 将图片流式传输给客户端
+			_, err = io.Copy(ctx.Response().BodyWriter(), resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				log.Errorf("传输图片数据失败 (URL: %s): %v", tryURL, err)
+				if i < len(backupURLs)-1 {
+					continue // 尝试下一个URL
+				}
+				return ctx.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+					"error": fmt.Sprintf("传输图片数据失败: %v", err),
+				})
+			}
+
+			// 如果成功获取图片，记录使用的URL
+			log.Infof("成功获取图片: %s (使用URL: %s)", originalURL, tryURL)
+			return nil
+		}
+
+		// 如果所有URL都失败了
+		return ctx.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "无法获取图片，所有尝试均失败",
+		})
+	}
+
+	// 处理其他域名的普通图片请求
 	// 创建请求
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
