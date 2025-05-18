@@ -47,24 +47,48 @@ func (r RedBook) ParseShareUrl(shareUrl string) (*models.VideoParseInfo, error) 
 
 			if isLivePhoto {
 				// 如果是livePhoto，获取视频URL
-				livePhotoUrl := imageItem.Get("video.media.stream.h264.0.masterUrl").String()
+				livePhotoUrl := imageItem.Get("stream.h264.0.masterUrl").String()
 				if len(livePhotoUrl) > 0 {
 					images = append(images, livePhotoUrl)
+				} else {
+					// 尝试从全局视频数据获取
+					livePhotoUrl = data.Get("video.media.stream.h264.0.masterUrl").String()
+					if len(livePhotoUrl) > 0 {
+						images = append(images, livePhotoUrl)
+					}
 				}
 			} else {
 				// 处理普通图片
+				// 首先尝试使用原始URL
 				imageUrl := imageItem.Get("urlDefault").String()
 				if len(imageUrl) > 0 {
-					imgId := strings.Split(imageUrl[strings.LastIndex(imageUrl, "/")+1:], "!")[0]
+					// 保留原始URL作为主URL
+					images = append(images, imageUrl)
+
+					// 同时提取图片ID并创建备用URL
+					var imgId string
+					if strings.Contains(imageUrl, "!") {
+						// 处理形如 xxx/yyy!format 的URL
+						imgId = strings.Split(imageUrl[strings.LastIndex(imageUrl, "/")+1:], "!")[0]
+					} else {
+						// 处理其他格式URL
+						imgId = imageUrl[strings.LastIndex(imageUrl, "/")+1:]
+					}
+
 					// 如果链接中带有 spectrum/ , 替换域名时需要带上
 					spectrumStr := ""
 					if strings.Contains(imageUrl, "spectrum") {
 						spectrumStr = "spectrum/"
 					}
-					newUrl := fmt.Sprintf("https://ci.xiaohongshu.com/%s%s?imageView2/2/w/0/format/jpg", spectrumStr, imgId)
-					fmt.Println(imageUrl)
-					fmt.Println(newUrl)
-					images = append(images, newUrl)
+
+					// 创建备用URL
+					backupUrl := fmt.Sprintf("https://ci.xiaohongshu.com/%s%s?imageView2/2/w/0/format/jpg", spectrumStr, imgId)
+					fmt.Println("Original URL:", imageUrl)
+					fmt.Println("Backup URL:", backupUrl)
+
+					// 添加备用URL到images数组
+					// 注意：这里我们不再将备用URL加入images数组，因为前端可能不支持多URL
+					// 但我们保留它作为日志输出以便调试
 				}
 			}
 		}
